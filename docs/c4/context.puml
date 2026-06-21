@@ -1,0 +1,26 @@
+@startuml PayDude-Context
+' C4 Level 1 — System Context
+' Render: see docs/c4/README.md
+'   plantuml docs/c4/context.puml         (PlantUML >= 1.2022 bundles the C4 stdlib used below)
+' Remote-include alternative (no local stdlib needed):
+'   !includeurl https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+!include <C4/C4_Context>
+
+LAYOUT_WITH_LEGEND()
+title System Context — PayDude Financial Transactions API
+
+Person(holder, "Account Holder", "Registers, authenticates (optionally with a TOTP second factor), transfers funds, views balances and history")
+Person(operator, "Operator / SRE", "Monitors dashboards, introspects the running JVM, adjusts log levels, reviews the security audit trail")
+
+System(paydude, "PayDude API", "Spring Boot 3.5 / Java 21 REST API for concurrency-safe, idempotent money movement with stateless JWT auth")
+
+System_Ext(hibp, "HaveIBeenPwned", "Breached-password range API (k-anonymity: first 5 SHA-1 hex only)")
+System_Ext(authapp, "TOTP Authenticator", "App on the holder's device (Google Authenticator-compatible); provisioned once via otpauth:// URI, then generates RFC 6238 codes offline — no network path to PayDude")
+
+Rel(holder, paydude, "Registers / logs in / transfers / queries", "HTTPS · JSON · Bearer JWT")
+Rel(holder, authapp, "Scans the enrollment QR; reads 6-digit codes for the step-up login", "offline")
+Rel(operator, paydude, "Scrapes metrics, reads health, sets log levels", "HTTPS · HTTP Basic (actuator admin tier)")
+Rel(operator, paydude, "Reads the security audit trail (/v1/admin/audit-events)", "HTTPS · Bearer JWT · ROLE_ADMIN")
+Rel(paydude, hibp, "Screens chosen passwords", "HTTPS")
+
+@enduml

@@ -1,0 +1,66 @@
+# Dependabot — keeps dependencies current by opening PRs when newer versions ship.
+# This is the automation behind "how do I stay up to date?": you review a PR instead
+# of chasing versions by hand. CI (security.yml) gates every PR — build, tests, SCA,
+# SAST and the Trivy image scan must stay green — so an update only merges if it's safe.
+version: 2
+
+# Labels: intentionally left at Dependabot's defaults. Every PR already gets a
+# `dependencies` label plus a per-ecosystem one (java / github-actions / docker),
+# auto-created by Dependabot. Defining `labels:` here would REPLACE those defaults
+# and drop the ecosystem tag — so we deliberately don't set it.
+updates:
+  # --- GitHub Actions used in .github/workflows/ (trivy-action, checkout, setup-java, ...) ---
+  # This is what keeps Trivy current: when a new trivy-action release ships (bundling a
+  # newer Trivy binary), Dependabot opens a PR. No manual version pin needed.
+  - package-ecosystem: "github-actions"
+    directory: "/"                 # Dependabot auto-scans .github/workflows/ from the repo root
+    schedule:
+      interval: "weekly"
+      day: "monday"                # aligns with the weekly security.yml scan (Mondays)
+    groups:
+      github-actions:              # one PR for all action bumps instead of one per action
+        patterns: ["*"]
+    # Conventional Commits prefix so Dependabot's own commits match the repo convention,
+    # e.g. "chore(deps): bump actions/checkout from 4 to 5". `include: scope` appends the
+    # (deps)/(deps-dev) scope; default (no prefix) reads "Bump actions/checkout ...".
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # --- Java dependencies in pom.xml ---
+  # Routine version-bump PRs. This is the class of update that would have surfaced the
+  # commons-lang3 / OpenTelemetry CVEs we just patched, before a scanner ever flagged them.
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      # Bundle low-risk minor/patch bumps into one PR; majors stay separate to review carefully.
+      maven-minor-and-patch:
+        # Explicit "*" = match all dependencies; the update-types filter below narrows to
+        # minor/patch. Omitting patterns defaults to "*" anyway — this is purely for readability.
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:                  # same Conventional Commits prefix as above -> chore(deps): ...
+      prefix: "chore"
+      include: "scope"
+
+  # --- Docker base images in the Dockerfile (eclipse-temurin, maven) ---
+  # Keeps the runtime base patched — the same class of fix as the `apk upgrade` that cleared
+  # the OpenSSL/Alpine CVEs, but pulling a newer, already-patched base image tag.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      # Multi-stage Dockerfile has two base images (maven build + eclipse-temurin runtime);
+      # this bundles both FROM bumps into one PR. Tradeoff: if one base image's bump fails CI,
+      # it holds up the other until resolved — acceptable for infrequent base-image bumps.
+      docker:
+        patterns: ["*"]
+    commit-message:                  # same Conventional Commits prefix as above -> chore(deps): ...
+      prefix: "chore"
+      include: "scope"

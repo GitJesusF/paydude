@@ -1,0 +1,533 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.15</version>
+        <relativePath/> <!-- lookup parent from repository -->
+    </parent>
+    <groupId>com.jesusf</groupId>
+    <artifactId>paydude</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>paydude</name>
+    <description>PayDude MVP</description>
+    <url>https://github.com/GitJesusF/paydude</url>
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <developers>
+        <developer>
+            <id>GitJesusF</id>
+            <name>Jesus Obregon</name>
+            <url>https://github.com/GitJesusF</url>
+        </developer>
+    </developers>
+    <scm>
+        <connection>scm:git:https://github.com/GitJesusF/paydude.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/GitJesusF/paydude.git</developerConnection>
+        <url>https://github.com/GitJesusF/paydude</url>
+    </scm>
+    <properties>
+        <java.version>21</java.version>
+
+        <!-- Library versions not managed by the Spring Boot BOM. -->
+        <mapstruct.version>1.6.3</mapstruct.version>
+        <jjwt.version>0.13.0</jjwt.version>
+        <springdoc.version>2.8.17</springdoc.version>
+        <bucket4j.version>8.18.0</bucket4j.version>
+        <logstash-logback-encoder.version>8.0</logstash-logback-encoder.version>
+        <lombok-mapstruct-binding.version>0.2.0</lombok-mapstruct-binding.version>
+
+        <!-- Security overrides: bump Spring Boot BOM-managed transitive deps to their patched
+             versions ahead of the Boot release that adopts them. Drop each entry once the parent
+             BOM ships a version >= the one pinned here. -->
+        <commons-lang3.version>3.18.0</commons-lang3.version>      <!-- CVE-2025-48924 (StackOverflow in ClassUtils.getClass) -->
+        <opentelemetry.version>1.62.0</opentelemetry.version>      <!-- CVE-2026-45292 (unbounded memory in W3C baggage parsing) -->
+
+        <!-- Plugin versions: JaCoCo is not managed by the Boot parent; the rest belong to the
+             opt-in `security` profile. -->
+        <jacoco.version>0.8.14</jacoco.version>
+        <dependency-check.version>12.2.2</dependency-check.version>  <!-- 12.2.x fixes the NVD-client NPE on empty API responses; see nvd* settings in the security profile -->
+        <spotbugs.version>4.8.6.6</spotbugs.version>
+        <findsecbugs.version>1.13.0</findsecbugs.version>
+        <cyclonedx.version>2.9.1</cyclonedx.version>
+
+        <!-- Test-JVM agents. JaCoCo's prepare-agent overwrites `argLine` at build time (the empty
+             default keeps @{argLine} resolvable when JaCoCo is skipped); Surefire/Failsafe append
+             the Mockito agent. mockito.version is inherited from the Spring Boot BOM. -->
+        <argLine></argLine>
+        <mockito.javaagent>-javaagent:${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar</mockito.javaagent>
+    </properties>
+
+    <dependencies>
+        <!-- Spring Boot starters -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Persistence: PostgreSQL driver + Flyway migrations -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Stateless JWT (jjwt). Code compiles against the API only; the implementation and its
+             Jackson serializer resolve at runtime, so they can never be imported by accident. -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>${jjwt.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Rate limiting: bucket4j token buckets, stored in Caffeine caches -->
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j_jdk17-core</artifactId>
+            <version>${bucket4j.version}</version>
+        </dependency>
+        <!--
+            Caffeine backs AuthRateLimiter's per-key bucket storage. expireAfterAccess matched to
+            the refill period evicts silent keys (IPs, emails) once their bucket has fully refilled,
+            preventing the unbounded growth that a plain ConcurrentHashMap would cause under random
+            IP spraying. Version inherited from the Spring Boot 3.5.x BOM.
+        -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
+        <!-- API documentation: scans the controllers, serves /v3/api-docs + Swagger UI -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>${springdoc.version}</version>
+        </dependency>
+
+        <!-- Compile-time code generation (processors wired in maven-compiler-plugin) -->
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+            <version>${mapstruct.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Observability: Prometheus exporter + W3C trace propagation + JSON logs (prod) -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- W3C Trace Context: Boot reads/generates the `traceparent` header per request and
+             exposes traceId/spanId in the SLF4J MDC. No exporter is wired (no Tempo/Jaeger) —
+             the bridge is here for standard propagation + log correlation, not span shipping. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- JSON encoder for Logback. Activated only by the prod profile in logback-spring.xml. -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>${logstash-logback-encoder.version}</version>
+        </dependency>
+
+        <!-- Local developer experience: live restart + auto-started PostgreSQL container -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <scope>runtime</scope>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-docker-compose</artifactId>
+            <scope>runtime</scope>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Fails fast (validate phase) when the build environment drifts: a wrong JDK or Maven
+                 yields one clear error instead of a cryptic mid-compile failure. The dependency-graph
+                 rules (dependencyConvergence, requireUpperBoundDeps) are deliberately omitted: the
+                 Spring Boot BOM mediates transitive versions by design, and both rules report that
+                 intended mediation as conflicts. Version managed by the Boot parent. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>enforce-build-environment</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[21,)</version>
+                                </requireJavaVersion>
+                                <requireMavenVersion>
+                                    <!-- Spring Boot 3.x documented minimum; the wrapper ships 3.9.x. -->
+                                    <version>[3.6.3,)</version>
+                                </requireMavenVersion>
+                                <!-- Same dependency declared twice = typical merge-conflict leftover. -->
+                                <banDuplicatePomDependencyVersions/>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <!-- Required by Spring Boot 3 record-based @ConfigurationProperties binding. -->
+                    <parameters>true</parameters>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok-mapstruct-binding</artifactId>
+                            <version>${lombok-mapstruct-binding.version}</version>
+                        </path>
+                        <path>
+                            <groupId>org.mapstruct</groupId>
+                            <artifactId>mapstruct-processor</artifactId>
+                            <version>${mapstruct.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- Mockito inline mocks need a real Java agent; self-attach is blocked on some JDKs. -->
+                    <argLine>@{argLine} ${mockito.javaagent}</argLine>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <!-- Keep integration tests on the same JVM-agent setup as unit tests. -->
+                    <argLine>@{argLine} ${mockito.javaagent}</argLine>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>build-info</id>
+                        <goals>
+                            <goal>build-info</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>prepare-agent-integration</id>
+                        <goals>
+                            <goal>prepare-agent-integration</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>merge-results</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>merge</goal>
+                        </goals>
+                        <configuration>
+                            <fileSets>
+                                <fileSet>
+                                    <directory>${project.build.directory}</directory>
+                                    <includes>
+                                        <include>jacoco.exec</include>
+                                        <include>jacoco-it.exec</include>
+                                    </includes>
+                                </fileSet>
+                            </fileSets>
+                            <destFile>${project.build.directory}/jacoco-merged.exec</destFile>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                        <configuration>
+                            <dataFile>${project.build.directory}/jacoco-merged.exec</dataFile>
+                            <excludes>
+                                <exclude>**/dto/**/*</exclude>
+                                <exclude>**/entity/**/*</exclude>
+                                <exclude>**/mapper/**/*</exclude>
+                                <exclude>**/enums/**/*</exclude>
+                                <exclude>**/event/**/*</exclude>
+                                <exclude>**/Application.class</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                    <!-- Threshold 60% with 65% current baseline; raise when baseline moves up. -->
+                    <execution>
+                        <id>check-coverage</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <dataFile>${project.build.directory}/jacoco-merged.exec</dataFile>
+                            <excludes>
+                                <exclude>**/dto/**/*</exclude>
+                                <exclude>**/entity/**/*</exclude>
+                                <exclude>**/mapper/**/*</exclude>
+                                <exclude>**/enums/**/*</exclude>
+                                <exclude>**/event/**/*</exclude>
+                                <exclude>**/Application.class</exclude>
+                            </excludes>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.60</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!--
+            DevSecOps "security" profile — opt-in supply-chain / SAST / SBOM scanning, kept OUT of the
+            default build so `./mvnw verify` stays fast for the dev loop. CI activates it with
+            `-Psecurity` (see .github/workflows/security.yml). The gate fails on High+Critical findings;
+            committed suppression/filter files (.dependency-check-suppressions.xml, spotbugs-*.xml) are
+            the auditable escape hatch so accepted/unfixable items keep the build green.
+        -->
+        <profile>
+            <id>security</id>
+            <build>
+                <plugins>
+                    <!-- SCA — OWASP Dependency-Check: flags dependencies with known CVEs (NVD).
+                         Gate: failBuildOnCVSS=7 fails the build on High+Critical (CVSS >= 7.0). -->
+                    <plugin>
+                        <groupId>org.owasp</groupId>
+                        <artifactId>dependency-check-maven</artifactId>
+                        <version>${dependency-check.version}</version>
+                        <configuration>
+                            <failBuildOnCVSS>7</failBuildOnCVSS>
+                            <!-- Free NVD API key speeds the feed sync. Optional locally; set in CI. -->
+                            <nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
+                            <!-- NVD sync resilience: the public NVD API is flaky and intermittently
+                                 returns empty bodies that crashed the feed update with an NPE in the NVD
+                                 client (NvdCveClient._next: "bytes is null"). The 12.2.x client handles
+                                 the empty response gracefully; we also pace requests, retry harder on
+                                 transient failures, and trust a cached DB for a full week so the only run
+                                 that hits the NVD API is the weekly cron (security.yml) that refreshes it
+                                 — push/PR runs in between reuse the restored cache and never call the API.
+                                 Trade-off: PR runs can miss CVEs disclosed since the last weekly refresh;
+                                 the Monday cron always does a fresh full sync, so nothing is missed long. -->
+                            <nvdApiDelay>3000</nvdApiDelay>
+                            <nvdMaxRetryCount>20</nvdMaxRetryCount>
+                            <nvdValidForHours>168</nvdValidForHours>  <!-- one week; matches the weekly cron refresh -->
+                            <formats>
+                                <format>HTML</format>
+                                <format>JSON</format>
+                                <format>SARIF</format>
+                            </formats>
+                            <suppressionFiles>
+                                <suppressionFile>.dependency-check-suppressions.xml</suppressionFile>
+                            </suppressionFiles>
+                            <!-- Java project: the .NET assembly and Node analyzers add only noise/time. -->
+                            <assemblyAnalyzerEnabled>false</assemblyAnalyzerEnabled>
+                            <nodeAnalyzerEnabled>false</nodeAnalyzerEnabled>
+                            <!-- Sonatype OSS Index requires authentication since the 2026 migration to the
+                                 Sonatype Guide platform; anonymous requests now return HTTP 401, which the
+                                 analyzer surfaced as a cascade of AnalysisExceptions that failed the `check`
+                                 goal (failOnError defaults to true). The NVD feed is the authoritative CVE
+                                 source for this gate and OSS Index is only a supplementary overlay, so it is
+                                 disabled to keep CI deterministic. To re-enable, configure OSS Index
+                                 credentials (username + API token) from CI secrets — see the
+                                 dependency-check-maven docs. NOTE: the element name is all-lowercase
+                                 `ossindex`; the camelCase `ossIndexAnalyzerEnabled` is silently ignored. -->
+                            <ossindexAnalyzerEnabled>false</ossindexAnalyzerEnabled>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- SAST — SpotBugs + FindSecBugs: security bug patterns in first-party bytecode.
+                         Scoped to the SECURITY category (spotbugs-security-include.xml) so the gate
+                         fails on security findings, not general code-quality nits. -->
+                    <plugin>
+                        <groupId>com.github.spotbugs</groupId>
+                        <artifactId>spotbugs-maven-plugin</artifactId>
+                        <version>${spotbugs.version}</version>
+                        <configuration>
+                            <effort>Max</effort>
+                            <threshold>Low</threshold>
+                            <includeFilterFile>spotbugs-security-include.xml</includeFilterFile>
+                            <excludeFilterFile>spotbugs-exclude.xml</excludeFilterFile>
+                            <failOnError>true</failOnError>
+                            <sarifOutput>true</sarifOutput>
+                            <plugins>
+                                <plugin>
+                                    <groupId>com.h3xstream.findsecbugs</groupId>
+                                    <artifactId>findsecbugs-plugin</artifactId>
+                                    <version>${findsecbugs.version}</version>
+                                </plugin>
+                            </plugins>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- SBOM — CycloneDX: machine-readable inventory of every dependency (target/bom.*). -->
+                    <plugin>
+                        <groupId>org.cyclonedx</groupId>
+                        <artifactId>cyclonedx-maven-plugin</artifactId>
+                        <version>${cyclonedx.version}</version>
+                        <configuration>
+                            <outputFormat>all</outputFormat>
+                            <projectType>application</projectType>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>makeAggregateBom</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+</project>

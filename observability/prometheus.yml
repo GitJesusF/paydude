@@ -1,0 +1,34 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: paydude-local
+
+scrape_configs:
+  # PayDude application — scrapes the Micrometer Prometheus registry exposed by Spring Boot
+  # Actuator. /actuator/prometheus lives in the admin tier (HTTP Basic, ROLE_ADMIN) — see
+  # SecurityConfig.actuatorSecurityFilterChain — so the scrape must authenticate.
+  #
+  # The credentials below match the convenience defaults baked into docker-compose.yml
+  # (APPLICATION_SECURITY_ACTUATOR_PASSWORD) and application-dev.properties, so the local stack
+  # works with no setup. Prometheus does NOT expand environment variables in this file, so if you
+  # override ACTUATOR_PASSWORD on the app you must update the password here too (or switch to
+  # `password_file:` and mount a secret). Never commit a real production credential to this file.
+  - job_name: paydude
+    metrics_path: /actuator/prometheus
+    scrape_interval: 15s
+    basic_auth:
+      username: prometheus
+      password: local-actuator-secret
+    static_configs:
+      - targets:
+          - app:8090
+        labels:
+          application: paydude
+          environment: docker-local
+
+  # Prometheus self-scrape — useful to see scrape latency and config-reload events.
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090

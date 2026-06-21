@@ -1,0 +1,35 @@
+@startuml PayDude-Container
+' C4 Level 2 — Container diagram
+' Render: see docs/c4/README.md
+!include <C4/C4_Container>
+
+LAYOUT_WITH_LEGEND()
+title Container diagram — PayDude
+
+Person(holder, "Account Holder")
+Person(operator, "Operator / SRE")
+System_Ext(hibp, "HaveIBeenPwned", "Breached-password range API")
+System_Ext(spa, "Client SPA", "Browser app (out of scope); CORS-allowed origin")
+
+System_Boundary(paydude, "PayDude") {
+  Container(api, "PayDude API", "Java 21 · Spring Boot 3.5", "REST API: auth (with optional TOTP step-up), accounts, transactions, users, admin audit trail. Two security filter chains (JWT API + Basic actuator); idempotency; pessimistic locking; refresh-token rotation; account lockout; append-only security audit; nightly expired-data purge")
+  ContainerDb(db, "PostgreSQL", "PostgreSQL 17 + Flyway", "users · accounts · transactions · account_audits · idempotency_keys · refresh_tokens · security_audit_events · mfa_recovery_codes")
+  Container(prometheus, "Prometheus", "TSDB", "Scrapes /actuator/prometheus over HTTP Basic every 15s")
+  Container(promtail, "Promtail", "Log shipper", "Tails container stdout, parses JSON, ships to Loki")
+  Container(loki, "Loki", "Log store", "Append-only, LogQL-queryable")
+  Container(grafana, "Grafana", "Dashboards", "RED-method golden-signals dashboard (auto-provisioned)")
+}
+
+Rel(holder, spa, "Uses", "HTTPS")
+Rel(spa, api, "Calls REST API", "HTTPS · JSON · Bearer JWT · Idempotency-Key")
+Rel(api, db, "Reads/writes; SELECT … FOR UPDATE on balance ops", "JDBC")
+Rel(api, hibp, "Password breach screening", "HTTPS")
+Rel(prometheus, api, "Scrapes metrics", "HTTP Basic, every 15s")
+Rel(promtail, api, "Reads container stdout (JSON logs)", "Docker API (socket)")
+Rel(promtail, loki, "Pushes log streams", "HTTP")
+Rel(grafana, prometheus, "Queries", "PromQL")
+Rel(grafana, loki, "Queries", "LogQL")
+Rel(operator, grafana, "Views dashboards", "HTTPS")
+Rel(operator, api, "Actuator admin (metrics/loggers/configprops/env)", "HTTP Basic")
+
+@enduml

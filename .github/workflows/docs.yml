@@ -1,0 +1,84 @@
+# Docs pipeline — keeps the project documentation verifiable the same way the code is:
+# the C4-PlantUML sources must parse, every embedded Mermaid block must compile, and internal
+# links/anchors must resolve. Scoped by `paths` so doc edits don't ride the full build-and-scan
+# pipeline (security.yml) and code-only changes don't pay for doc checks.
+name: Docs
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'docs/**', '*.md', '.github/workflows/docs.yml' ]
+  pull_request:
+    paths: [ 'docs/**', '*.md', '.github/workflows/docs.yml' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The canonical C4 sources. `-checkonly` parses without rendering, so a broken .puml fails in
+  # seconds; same image docs/c4/README.md recommends for local rendering.
+  plantuml:
+    name: C4-PlantUML syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: plantuml -checkonly docs/c4/*.puml
+        run: docker run --rm -v "$PWD:/work" -w /work plantuml/plantuml -checkonly docs/c4/*.puml
+
+  # The Mermaid renditions are what GitHub actually renders inline — a syntax error there shows
+  # the reader an error box, not a diagram. Extract every ```mermaid fence into its own file and
+  # compile each with mermaid-cli; any failure is annotated with its source file.
+  mermaid:
+    name: Mermaid blocks compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Extract fenced mermaid blocks
+        run: |
+          set -euo pipefail
+          mkdir -p target/mermaid
+          for f in README.md docs/*.md; do
+            awk -v dir=target/mermaid -v src="$(basename "$f" .md)" '
+              /^```mermaid[[:space:]]*$/ { in_block = 1; n++; out = dir "/" src "-" n ".mmd"; next }
+              in_block && /^```[[:space:]]*$/ { in_block = 0; next }
+              in_block { print > out }
+            ' "$f"
+          done
+          ls -l target/mermaid
+      - name: Compile each block with mermaid-cli
+        run: |
+          set -euo pipefail
+          npm install --no-fund --no-audit -g @mermaid-js/mermaid-cli
+          echo '{ "args": ["--no-sandbox"] }' > target/puppeteer.json
+          shopt -s nullglob
+          status=0
+          for m in target/mermaid/*.mmd; do
+            if ! mmdc --puppeteerConfigFile target/puppeteer.json -i "$m" -o "$m.svg" --quiet; then
+              echo "::error file=$m::Mermaid block failed to compile"
+              status=1
+            fi
+          done
+          exit $status
+
+  # Internal links and #fragment anchors across the documentation set. `--offline` checks only
+  # file-to-file links — deterministic, no dependency on third-party sites' availability.
+  links:
+    name: Markdown links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: lychee (internal links + anchors)
+        uses: lycheeverse/lychee-action@8646ba30535128ac92d33dfc9133794bfdd9b411 # v2
+        with:
+          args: >-
+            --offline --include-fragments --no-progress
+            README.md docs
+          fail: true

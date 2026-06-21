@@ -1,0 +1,42 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Build outputs
+target
+*.log
+
+# Maven wrapper — the image builds with the official maven:3.9-alpine base, so
+# the wrapper scripts and the .mvn/ payload would be dead weight in the build
+# context (slower COPY, larger cache key).
+mvnw
+mvnw.cmd
+.mvn
+
+# CI configs — only consumed by GitHub Actions, never by the runtime image.
+.github
+
+# IDE / editor
+.idea
+*.iws
+*.iml
+*.ipr
+.vscode
+
+# Local env (JWT secret and DB password live here)
+.env
+.env.*
+!.env.example
+
+# Docs / observability stack (not needed in the app image)
+docs
+observability
+docker-compose*.yml
+HELP.md
+README.md
+LICENSE
+
+# OS noise
+.DS_Store
+Thumbs.db

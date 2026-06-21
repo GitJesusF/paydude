@@ -1,0 +1,54 @@
+@startuml PayDude-Component-API
+' C4 Level 3 — Component diagram for the PayDude API container
+' Render: see docs/c4/README.md
+!include <C4/C4_Component>
+
+LAYOUT_WITH_LEGEND()
+title Component diagram — PayDude API container
+
+ContainerDb(db, "PostgreSQL", "JPA + Flyway")
+System_Ext(hibp, "HaveIBeenPwned", "Range API")
+
+Container_Boundary(api, "PayDude API") {
+  Component(rate, "IpRateLimitFilter", "Servlet filter (HIGHEST_PRECEDENCE+10)", "Per-IP token buckets on the public auth POSTs (login/register/refresh/mfa-verify); emits IETF RateLimit headers; runs before Spring Security so throttled requests never pay BCrypt or dispatch")
+  Component(actchain, "Actuator SecurityFilterChain", "Spring Security · @Order(1)", "securityMatcher(toAnyEndpoint); health/info anonymous, rest hasRole(ADMIN) via HTTP Basic; dedicated in-memory scraper account")
+  Component(jwtchain, "API SecurityFilterChain", "Spring Security · @Order(2)", "JwtAuthenticationFilter rebuilds SecurityUser from claims (typ=at+jwt only) — no DB hit on the hot path; /v1/admin/** requires ROLE_ADMIN")
+
+  Component(ctrls, "Controllers", "Spring MVC", "Auth · Account · Transaction · User (v1 + additive v2) · Mfa · AdminAudit")
+  Component(limiters, "Business rate limiters", "AuthRateLimiter · WriteRateLimiter · ReauthRateLimiter", "Per-email and per-user token buckets (bucket4j over Caffeine); enforced in controllers before any service/DB work")
+  Component(svc, "Domain services", "@Service (iface + impl)", "Auth · Account · Transaction · User business logic and transaction boundaries; orchestrates the step-up login")
+  Component(idem, "IdempotencyKeyService", "@Service · REQUIRES_NEW", "Lookup-under-lock reservation; canonical-JSON SHA-256 fingerprint; sealed ReservationOutcome")
+  Component(refresh, "RefreshTokenService", "@Service", "Opaque token rotation, reuse detection, family-based revocation (revocation commits REQUIRES_NEW before the 401)")
+  Component(mfa, "MfaService + TotpService", "@Service · RFC 6238 on JCA HmacSHA1", "Enrollment lifecycle (setup / confirm / disable), single-use TOTP verification, SHA-256-hashed recovery codes")
+  Component(lockout, "LoginAttemptService", "@Service · REQUIRES_NEW", "Persistent anti-bruteforce counters; flips users to LOCKED with an auto-expiring window")
+  Component(audit, "SecurityAuditService", "@Service · fail-safe, REQUIRES_NEW writer", "Append-only security_audit_events trail; also fed by the lockout and MFA flows; request context via AuditContextResolver")
+  Component(guard, "BreachedPasswordGuard", "@Component", "Fail-open HaveIBeenPwned screening (k-anonymity)")
+  Component(listeners, "Event listeners", "Spring app events", "AccountEventListener (BEFORE_COMMIT) · IdempotencyCleanupListener (AFTER_ROLLBACK)")
+  Component(cleanup, "ExpiredDataCleanupJob", "@Scheduled · 03:00 UTC", "Nightly purge: expired idempotency keys and refresh tokens, audit rows past retention")
+  Component(metrics, "BusinessMetrics", "Micrometer facade", "Counters + timer; published at /actuator/prometheus")
+  Component(repos, "Repositories", "Spring Data JPA", "Pessimistic-lock queries (…ForUpdate); atomic single-statement UPDATE guards; JPQL where needed")
+}
+
+Rel(rate, jwtchain, "passes allowed requests to")
+Rel(jwtchain, ctrls, "authenticated request")
+Rel(ctrls, limiters, "checks per-email / per-user budgets via")
+Rel(ctrls, svc, "delegates to")
+Rel(ctrls, mfa, "enrollment lifecycle (password-gated)")
+Rel(svc, idem, "reserve key (transfer / deposit / withdraw)")
+Rel(svc, refresh, "rotate / revoke")
+Rel(svc, mfa, "verify TOTP / recovery proof (step-up login)")
+Rel(svc, lockout, "count failures · release expired locks · reset on success")
+Rel(svc, audit, "append security events")
+Rel(refresh, audit, "TOKEN_REUSE_DETECTED / LOGOUT")
+Rel(svc, guard, "screen chosen password")
+Rel(guard, hibp, "range query", "HTTPS")
+Rel(svc, listeners, "publishes events to")
+Rel(svc, repos, "reads/writes via")
+Rel(repos, db, "JDBC")
+Rel(svc, metrics, "records signals to")
+Rel(cleanup, idem, "purge expired")
+Rel(cleanup, refresh, "purge expired")
+Rel(cleanup, audit, "purge past retention")
+Rel(actchain, metrics, "exposes /actuator/prometheus from")
+
+@enduml

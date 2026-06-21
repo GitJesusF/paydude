@@ -1,0 +1,86 @@
+# Local observability stack — Prometheus + Loki + Promtail + Grafana.
+#
+# Designed as a Compose OVERLAY of docker-compose.yml. Bring up the full stack with:
+#
+#   docker-compose -f docker-compose.yml -f docker-compose.observability.yml up
+#
+# Then open:
+#   http://localhost:3000           Grafana (anonymous Admin, no login)
+#   http://localhost:9090           Prometheus UI (query inspector)
+#   http://localhost:3100/ready     Loki health
+#
+# All three ports bind to 127.0.0.1 on purpose: Grafana is anonymous-Admin, Prometheus runs with
+# --web.enable-lifecycle (unauthenticated POST /-/quit), and Loki has auth_enabled=false — none of
+# them may be reachable from the LAN. Promtail's own HTTP port (9080) is not published at all.
+#
+# The Grafana container auto-provisions both datasources (Prometheus + Loki) and a starter
+# "PayDude — golden signals" dashboard, so the stack is browsable end-to-end with no manual setup.
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: paydude-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      app:
+        condition: service_healthy
+
+  loki:
+    image: grafana/loki:3.2.1
+    container_name: paydude-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./observability/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+
+  promtail:
+    image: grafana/promtail:3.2.1
+    container_name: paydude-promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./observability/promtail-config.yml:/etc/promtail/config.yml:ro
+      # docker_sd discovers containers AND reads their logs through this socket (Docker API);
+      # no bind-mount of /var/lib/docker/containers is needed for the API path.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Read offsets survive container recreation — without this, every restart re-ships all
+      # logs and Loki (which does not deduplicate) stores them twice.
+      - promtail-positions:/positions
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    container_name: paydude-grafana
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: dark
+      # Same posture as Loki's analytics.reporting_enabled=false — the local stack phones nowhere.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+      - loki
+
+volumes:
+  prometheus-data:
+  loki-data:
+  grafana-data:
+  promtail-positions:

@@ -1,0 +1,40 @@
+@startuml PayDude-Transfer-Dynamic
+' C4 Dynamic diagram — idempotent transfer (POST /v1/transactions/transfer)
+' Render: see docs/c4/README.md
+!include <C4/C4_Dynamic>
+
+LAYOUT_WITH_LEGEND()
+title Dynamic view — Idempotent transfer (POST /v1/transactions/transfer)
+
+Person(client, "Client")
+Container(tc, "TransactionController", "Spring MVC")
+Container(wr, "WriteRateLimiter", "per-user token bucket")
+Container(ts, "TransactionService", "@Service")
+Container(ik, "IdempotencyKeyService", "@Service · REQUIRES_NEW")
+ContainerDb(db, "PostgreSQL", "JPA + Flyway")
+
+Rel(client, tc, "POST /transfer (Idempotency-Key + body)")
+Rel(tc, wr, "enforceWriteByUser(userId) — 429 + Retry-After when the budget is spent")
+Rel(tc, ts, "transfer(userId, key, request)")
+Rel(ts, ik, "reserveKey(...)")
+Rel(ik, db, "SELECT idempotency_keys FOR UPDATE (key_value,user_id)")
+Rel(ik, db, "if absent: INSERT PENDING; if expired: reset to PENDING")
+Rel(ts, db, "lock both accounts FOR UPDATE in alphabetical account_number order")
+Rel(ts, db, "validate, update balances, write Transaction + 2 AccountAudit")
+Rel(ts, db, "idempotency_keys -> COMPLETED (cache response body)")
+Rel(ts, client, "TransactionResponse")
+
+note right of ik
+  Duplicate request: the existing row is loaded under
+  a pessimistic lock. COMPLETED replays the cached
+  body; expired rows are reclaimed as fresh PENDING
+  reservations before hash comparison.
+end note
+
+note right of ts
+  On rollback, IdempotencyCleanupListener flips the
+  key PENDING -> FAILED (AFTER_ROLLBACK, REQUIRES_NEW),
+  so a new key can be retried.
+end note
+
+@enduml

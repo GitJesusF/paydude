@@ -1,0 +1,123 @@
+# Production hardening overlay for docker-compose.yml.
+#
+# Compose with the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What this overlay enforces on top of the base "production-shaped" stack:
+#
+#   * Secrets become MANDATORY. The `${VAR:?msg}` syntax makes `docker compose
+#     up` fail fast with a clear message if JWT_SECRET_KEY, DB_PASSWORD or
+#     CORS_ALLOWED_ORIGINS is unset — no silent fallback to the
+#     convenience JWT default baked into docker-compose.yml.
+#   * The Postgres port is no longer published to the host. `ports: []` clears
+#     the list from the base file, so the DB is reachable only from inside the
+#     Compose network — the same posture as a managed DB behind a private
+#     subnet.
+#   * Resource limits (mem, cpu, pids) so a runaway container cannot starve
+#     the host or the other service.
+#   * `restart: unless-stopped` so a transient crash recovers without operator
+#     intervention.
+#   * Log rotation via the json-file driver — without `max-size` / `max-file`,
+#     a leaky logger fills the host disk over weeks.
+#   * `cap_drop: [ALL]` on the app. Spring Boot needs zero Linux capabilities.
+#   * `no-new-privileges:true` — defense in depth against any setuid binary
+#     that might end up on the image via a future base-image change.
+#   * `init: true` — a tini-style PID 1 so the JVM receives SIGTERM and the
+#     graceful-shutdown logic (server.shutdown=graceful,
+#     spring.lifecycle.timeout-per-shutdown-phase=30s) actually runs instead
+#     of being killed mid-request on rolling deploys.
+#   * `read_only: true` + `tmpfs: /tmp` on the app. The JVM only writes to
+#     /tmp (Tomcat work dir, heap dumps on OOM, JIT temp). Everything else on
+#     the rootfs is immutable, so a vulnerable dependency cannot persist a
+#     payload across restarts.
+#   * JVM container ergonomics via JAVA_TOOL_OPTIONS — respect the cgroup
+#     memory limit, dump heap on OOM, exit on OOM so the orchestrator
+#     restarts a clean process instead of nursing a zombie.
+#
+# What this overlay does NOT do — deliberate scope decisions:
+#
+#   * TLS termination. Real prod fronts the app with nginx / Caddy / Traefik
+#     or a cloud LB that terminates HTTPS. Coupling cert rotation to compose
+#     would push lifecycle concerns into the wrong layer.
+#   * Docker secrets / external secret managers. Env vars from a sourced .env
+#     are acceptable on a single-host bare-metal Docker deploy. Multi-host or
+#     regulated deployments should integrate Vault / AWS Secrets Manager /
+#     SOPS and project the values into the env at compose time.
+#   * Multi-replica orchestration. Horizontal scaling requires moving the
+#     rate-limit buckets from per-process Caffeine to a shared
+#     bucket4j-redis ProxyManager (see docs/patterns.md #18, layered rate limiting).
+#     That conversation belongs in Kubernetes / ECS / Nomad, not compose.
+
+services:
+  db:
+    # `!reset` (Compose v2.24+) clears the list merged from the base file.
+    # A plain `ports: []` would NOT work — compose appends overlay list values
+    # to the base's, so the host publication on 5432 would survive. Verify the
+    # un-publish with:
+    #   docker compose -f docker-compose.yml -f docker-compose.prod.yml config
+    # The merged output should show no `ports:` entry on the db service.
+    ports: !reset []
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 200
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  app:
+    environment:
+      # `:?msg` makes the compose invocation fail with the message if the var
+      # is unset or empty. The base file's convenience defaults
+      # (${JWT_SECRET_KEY:-<baked default>}) are overridden here. Values are
+      # quoted because the error messages contain colons / parens / dashes
+      # that the YAML parser would otherwise read as block-mapping syntax.
+      APPLICATION_SECURITY_JWT_SECRET_KEY: "${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set - generate a 32-byte Base64 key with openssl rand -base64 32}"
+      SPRING_DATASOURCE_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD must be set}"
+      # CORS origins are mandatory in application-prod.properties (no default
+      # — see comment there). Surface the same requirement at the compose
+      # layer so a misconfigured deploy fails at `up` time instead of at the
+      # first browser request, when the SPA mysteriously cannot talk to the
+      # API.
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS must be set - comma-separated, e.g. https://app.paydude.com}"
+      # Actuator Basic-auth scraper password is mandatory in application-prod.properties (no
+      # default). Surface the requirement here too so a deploy never ships the guessable local
+      # default that the base file bakes for convenience.
+      APPLICATION_SECURITY_ACTUATOR_PASSWORD: "${ACTUATOR_PASSWORD:?ACTUATOR_PASSWORD must be set - the Basic-auth credential Prometheus uses to scrape /actuator/prometheus}"
+      # JVM container ergonomics. -XX:+UseContainerSupport has been on by
+      # default since JDK 10 — what actually pins heap size to the cgroup is
+      # MaxRAMPercentage. 75% leaves ~25% for native memory: thread stacks,
+      # JIT code cache, GC structures, Hibernate metamodel, direct buffers.
+      # ExitOnOutOfMemoryError ensures the orchestrator restarts a clean
+      # process rather than letting the JVM nurse a degraded one.
+      JAVA_TOOL_OPTIONS: >-
+        -XX:MaxRAMPercentage=75.0
+        -XX:+UseG1GC
+        -XX:+ExitOnOutOfMemoryError
+        -XX:+HeapDumpOnOutOfMemoryError
+        -XX:HeapDumpPath=/tmp
+    restart: unless-stopped
+    init: true
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 300
+    # The fat-jar runtime needs /tmp writable for Tomcat's work directory and
+    # heap dumps. Everything else (app classpath under /app, the JRE under
+    # /opt/java) is read-only — a compromised dependency cannot persist a
+    # payload across restarts.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

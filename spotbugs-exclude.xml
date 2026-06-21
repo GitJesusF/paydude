@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs / FindSecBugs EXCLUDE filter — the auditable triage log for SECURITY-category findings that
+  are accepted false positives or informational markers. Each <Match> below records a deliberate,
+  justified exception so the strict gate (threshold Low, "fail on any security finding") stays green
+  without silently loosening the threshold. Never suppress a real, fixable issue.
+
+  Reference: https://spotbugs.readthedocs.io/en/stable/filter.html
+-->
+<FindBugsFilter xmlns="https://github.com/spotbugs/filter/3.0.0">
+
+    <!--
+      CRLF_INJECTION_LOGS — FindSecBugs flags every parameterized SLF4J call ({}) whose argument could
+      in theory carry a CRLF and forge a log line. Accepted as a class because: (1) all logging is
+      SLF4J parameterized (no string concatenation of user input into the message); (2) prod logs are
+      JSON via LogstashEncoder, which escapes newlines in field values — log forging is structurally
+      impossible there; (3) the codebase already masks account numbers and keeps PII out of logs
+      (see docs/standards.md, account-number masking). Re-evaluate if raw user strings are ever
+      concatenated into a log message.
+    -->
+    <Match>
+        <Bug pattern="CRLF_INJECTION_LOGS"/>
+    </Match>
+
+    <!--
+      SPRING_ENDPOINT — not a vulnerability: FindSecBugs tags every Spring controller method so a
+      reviewer notices the HTTP entry points. Those endpoints are already covered by Spring Security
+      (JWT + RBAC), bean validation, and the per-concern exception advices; the marker itself carries
+      no finding to fix.
+    -->
+    <Match>
+        <Bug pattern="SPRING_ENDPOINT"/>
+    </Match>
+
+    <!--
+      UNSAFE_HASH_EQUALS in IdempotencyKeyServiceImpl — the compared value is the idempotency request
+      FINGERPRINT (SHA-256 of the canonical request body), used to detect "same key, different body".
+      It is NOT a secret or a MAC: the client computes the identical hash from its own request, so a
+      timing side-channel reveals nothing an attacker doesn't already hold. Constant-time comparison is
+      irrelevant here (the refresh-token path, by contrast, looks up BY hash and never compares
+      candidates — see the note in RefreshTokenServiceImpl.sha256Hex). Scoped to the one class.
+    -->
+    <Match>
+        <Class name="com.jesusf.paydude.service.IdempotencyKeyServiceImpl"/>
+        <Bug pattern="UNSAFE_HASH_EQUALS"/>
+    </Match>
+
+</FindBugsFilter>

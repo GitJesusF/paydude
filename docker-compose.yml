@@ -1,0 +1,70 @@
+# Production-like stack: both Postgres and the app run as containers, the app is built from the
+# repo Dockerfile, and the Spring profile defaults to `prod` so the deploy mirrors what a real
+# environment would look like (JSON logs, no Swagger UI, narrow Actuator surface,
+# show-details=when-authorized on /actuator/health).
+#
+# For the inner developer loop use docker-compose.db-only.yml instead — that one only starts
+# Postgres and lets the app run on your local JVM with the `dev` profile (started automatically
+# by the spring-boot-docker-compose integration when you run
+# `./mvnw spring-boot:run -Dspring-boot.run.profiles=dev`).
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: paydude-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-paydude_db}
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-paydude_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: paydude-app
+    ports:
+      # App listens on 8090 (server.port in application.properties — the single source of truth).
+      - "8090:8090"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${DB_NAME:-paydude_db}
+      SPRING_DATASOURCE_USERNAME: ${DB_USERNAME:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-changeme}
+
+      # The JWT default below is a convenience so `docker-compose up` works for someone
+      # cloning the repo. A real deployment must always inject JWT_SECRET_KEY from a secret manager
+      # (Vault, AWS Secrets Manager, SOPS-encrypted file, etc.) — never rely on this default.
+      APPLICATION_SECURITY_JWT_SECRET_KEY: ${JWT_SECRET_KEY:-0/cqwTDpHoxzKdR28jBPNZ4jMz/Sg9hlqzMER+6VRiY=}
+      APPLICATION_SECURITY_JWT_EXPIRATION: ${JWT_EXPIRATION_TIME:-900000}
+
+      # Actuator Basic-auth scraper password. The prod profile requires it (no default in
+      # application-prod.properties), so the base compose bakes a convenience default — the same
+      # value as observability/prometheus.yml — so `docker-compose up` plus the observability
+      # overlay scrapes /actuator/prometheus out of the box. Like the JWT key above, a real
+      # deployment must inject ACTUATOR_PASSWORD; the prod overlay makes it fail-fast.
+      APPLICATION_SECURITY_ACTUATOR_PASSWORD: ${ACTUATOR_PASSWORD:-local-actuator-secret}
+
+      # Default to `prod` so the stack mirrors a real deployment. Override with
+      # `SPRING_PROFILES_ACTIVE=dev docker-compose up` if you want the dev experience inside the
+      # container (Swagger UI, human-readable logs, wide Actuator surface).
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Container-level healthcheck wired to the Spring Boot readiness probe. While the JVM is
+    # still booting (Flyway migrations, JPA EntityManagerFactory init, security wiring) the
+    # readiness probe returns 503; once the app is ready to accept traffic it flips to 200.
+    # `start_period` gives the JVM a generous window before the first failure counts —
+    # cold-start on a constrained machine can easily exceed 30s with Flyway + Hibernate scan.
+    # `wget` ships with the BusyBox userland in eclipse-temurin:21-jre-alpine. The endpoint returns
+    # 200 when readiness is UP and 503 otherwise, so wget's exit code alone is a reliable signal —
+    # no shell pipe / grep gymnastics needed.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8090/actuator/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s

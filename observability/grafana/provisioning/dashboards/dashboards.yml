@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: paydude
+    orgId: 1
+    folder: PayDude
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

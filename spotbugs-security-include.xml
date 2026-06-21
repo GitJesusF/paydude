@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs INCLUDE filter — scopes the SAST gate to the SECURITY category (the FindSecBugs detectors),
+  so the build fails on security findings, not general code-quality patterns.
+
+  Deliberately NOT including MALICIOUS_CODE: in this codebase that category fires almost entirely as
+  EI_EXPOSE_REP / EI_EXPOSE_REP2 ("may expose internal representation") on every Spring-injected
+  collaborator field and on records holding framework objects — a Java-bean mutability concern, not a
+  security vulnerability. Including it would flood the gate with ~50 dependency-injection false
+  positives and obscure real findings. General code-quality SpotBugs categories belong to a separate
+  quality gate, not this security pipeline.
+
+  Reference: https://spotbugs.readthedocs.io/en/stable/filter.html
+-->
+<FindBugsFilter xmlns="https://github.com/spotbugs/filter/3.0.0">
+    <Match>
+        <Bug category="SECURITY"/>
+    </Match>
+</FindBugsFilter>
