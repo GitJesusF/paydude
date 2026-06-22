@@ -3,7 +3,7 @@
 # Multi-stage build. The build stage downloads dependencies and packages the
 # fat jar; the runtime stage runs only the layered output on a slim JRE.
 
-FROM maven:3.9.16-eclipse-temurin-21-alpine AS build
+FROM maven:3-eclipse-temurin-26-alpine AS build
 WORKDIR /app
 
 # Layer 1: dependency resolution. Cached as long as pom.xml + lombok.config
@@ -29,7 +29,7 @@ RUN java -Djarmode=tools -jar target/*.jar extract --layers --destination extrac
 # Runtime image — JRE only (no JDK or Maven), Alpine for size, non-root user
 # with a fixed UID/GID for predictable volume permissions in any host context.
 # ----------------------------------------------------------------------------
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:25-jre-alpine
 WORKDIR /app
 
 # Patch the base image's Alpine OS packages. The published eclipse-temurin:21-jre-alpine
